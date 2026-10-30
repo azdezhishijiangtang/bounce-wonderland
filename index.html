@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>弹跳奇境 Bounce Wonderland · 开放世界原型</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#0b1020; font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif; }
+  #game { display:block; width:100vw; height:100vh; cursor:crosshair; }
+  #overlay {
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(circle at 50% 35%, #1b2a4a, #0b1020 70%);
+    color:#eaf2ff; text-align:center; z-index:10; padding:24px;
+  }
+  #overlay .card {
+    max-width:560px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15);
+    border-radius:18px; padding:30px 34px; backdrop-filter:blur(6px);
+  }
+  #overlay h1 { font-size:30px; margin-bottom:6px; letter-spacing:1px; }
+  #overlay .sub { color:#9fc0ff; margin-bottom:18px; font-size:14px; }
+  #overlay .keys { text-align:left; font-size:14px; line-height:1.9; color:#cfe0ff; margin:14px 0 22px; }
+  #overlay .keys b { display:inline-block; min-width:96px; color:#ffd86b; }
+  #startBtn {
+    font-size:18px; padding:12px 34px; border:none; border-radius:30px; cursor:pointer;
+    background:linear-gradient(90deg,#ff7eb3,#ff6b6b); color:#fff; font-weight:700;
+    box-shadow:0 8px 24px rgba(255,107,107,.4); transition:transform .1s;
+  }
+  #startBtn:hover { transform:translateY(-2px) scale(1.03); }
+  #toast {
+    position:fixed; left:50%; top:18%; transform:translateX(-50%);
+    background:rgba(0,0,0,.55); color:#fff; padding:10px 18px; border-radius:20px;
+    font-size:15px; z-index:9; opacity:0; transition:opacity .3s; pointer-events:none;
+  }
+  /* 触屏（平板/手机）操控 */
+  html,body { touch-action:none; overscroll-behavior:none; user-select:none; -webkit-user-select:none; }
+  #game { touch-action:none; }
+  #touchui { position:fixed; inset:0; z-index:8; pointer-events:none; display:none; }
+  #touchui.show { display:block; }
+  #joyBase {
+    position:fixed; left:4vmin; bottom:4vmin; width:26vmin; height:26vmin; border-radius:50%;
+    background:rgba(255,255,255,.12); border:2px solid rgba(255,255,255,.3); pointer-events:auto; touch-action:none;
+  }
+  #joyKnob {
+    position:absolute; left:50%; top:50%; width:11vmin; height:11vmin; margin:-5.5vmin 0 0 -5.5vmin;
+    border-radius:50%; background:rgba(255,255,255,.45); border:2px solid rgba(255,255,255,.6);
+  }
+  #btnCluster {
+    position:fixed; right:3vmin; bottom:3vmin; display:grid; grid-template-columns:repeat(3,1fr);
+    gap:2vmin; pointer-events:none;
+  }
+  .tbtn {
+    pointer-events:auto; width:15vmin; height:15vmin; border-radius:50%; border:2px solid rgba(255,255,255,.35);
+    background:rgba(20,30,60,.45); color:#fff; font-size:6vmin; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; touch-action:none; user-select:none; -webkit-user-select:none;
+    backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); transition:transform .08s, background .08s;
+  }
+  .tbtn span { font-size:2.6vmin; margin-top:.4vmin; opacity:.85; }
+  .tbtn:active { transform:scale(.9); background:rgba(255,120,120,.5); }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="toast"></div>
+<div id="overlay">
+  <div class="card">
+    <h1>弹跳奇境 🌟</h1>
+    <div class="sub">Bounce Wonderland · 开放世界物理沙盒原型</div>
+    <p style="color:#cfe0ff;font-size:14px;line-height:1.7">
+      你误入漂浮的奇境「波波兰」，扮演爱玩的小家伙「波波」。<br>
+      把整个世界当成玩具——扔飞箱子、踩弹跳板、变大推土、缩小钻缝，<br>
+      集齐 <b style="color:#ffd86b">10 颗星星</b>，再去和镇长聊聊。
+    </p>
+    <div class="keys">
+      <div><b>移动</b> WASD / 方向键</div>
+      <div><b>冲刺</b> 空格</div>
+      <div><b>抓取</b> E（再按放下）</div>
+      <div><b>投掷</b> 抓住后鼠标左键甩出</div>
+      <div><b>变大 / 变小</b> Q / R</div>
+      <div><b>对话</b> 靠近 NPC 按 F</div>
+    </div>
+    <div class="sub" style="margin:6px 0 0;font-size:12.5px;color:#9fc0ff">📱 平板/手机：左摇杆移动，右侧按钮 抓/投/冲刺/大/小/对话</div>
+    <button id="startBtn">进入奇境 ▶</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let W = 0, H = 0;
+  function resize(){ W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
+  addEventListener('resize', resize); resize();
+
+  // ---------- 工具 ----------
+  const rand = (a,b)=>a+Math.random()*(b-a);
+  const clamp = (v,a,b)=>v<a?a:(v>b?b:v);
+  const dist = (ax,ay,bx,by)=>Math.hypot(ax-bx,ay-by);
+  function seeded(s){ return ()=>{ s=(s*1664525+1013904223)&0x7fffffff; return s/0x7fffffff; }; }
+
+  // ---------- 世界 ----------
+  const WORLD = { w:3400, h:2400 };
+  const cam = { x:0, y:0, shake:0 };
+  let time = 0;            // 0..1 昼夜
+  let started = false;
+
+  // 实体容器
+  let obstacles = [];      // 静态：树、石
+  let items = [];          // 动态：箱、球、箱(藏星)
+  let bounces = [];        // 弹跳板
+  let stars = [];          // 收集物
+  let npcs = [];           // NPC
+  let particles = [];
+  let decos = [];          // 背景装饰草丛
+  let fireflies = [];
+
+  const player = {
+    x:WORLD.w/2, y:WORLD.h/2, vx:0, vy:0, r:18, baseR:18,
+    speed:3.3, mass:5, holding:null, scale:1,
+    dashCd:0, dashT:0, face:0, name:"波波"
+  };
+
+  // ---------- 生成世界 ----------
+  function buildWorld(){
+    obstacles=[]; items=[]; bounces=[]; stars=[]; npcs=[]; particles=[]; decos=[]; fireflies=[];
+    const r = seeded(20240517);
+    // 装饰草丛
+    for(let i=0;i<420;i++){
+      decos.push({ x:r()*WORLD.w, y:r()*WORLD.h, s:rand(.6,1.3), c: r()>.5?'#5fae5a':'#6fbf63' });
+    }
+    // 树（静态障碍）
+    for(let i=0;i<60;i++){
+      let x,y,tries=0;
+      do{ x=r()*WORLD.w; y=r()*WORLD.h; tries++; }
+      while(dist(x,y,player.x,player.y)<160 && tries<20);
+      obstacles.push({ x, y, r:rand(22,34), type:'tree' });
+    }
+    // 石头（静态）
+    for(let i=0;i<40;i++){
+      obstacles.push({ x:r()*WORLD.w, y:r()*WORLD.h, r:rand(14,26), type:'rock' });
+    }
+    // 弹跳板
+    for(let i=0;i<14;i++){
+      bounces.push({ x:r()*WORLD.w, y:r()*WORLD.h, r:26, type:'bounce' });
+    }
+    // 自由星星
+    for(let i=0;i<6;i++){
+      stars.push({ x:r()*WORLD.w, y:r()*WORLD.h, got:false, ph:r()*6.28 });
+    }
+    // 藏星星的箱子（需砸碎）
+    for(let i=0;i<4;i++){
+      items.push({ x:r()*WORLD.w, y:r()*WORLD.h, vx:0, vy:0, r:18, type:'crate', mass:1.4, hasStar:true, broken:false });
+    }
+    // 普通箱/球（纯沙盒玩具）
+    for(let i=0;i<14;i++){
+      const isBall = r()>.5;
+      items.push({ x:r()*WORLD.w, y:r()*WORLD.h, vx:0, vy:0, r:isBall?14:18,
+        type:isBall?'ball':'box', mass:isBall?0.8:1.2, rest: isBall?0.82:0.4,
+        color: isBall?'#ffd86b':(r()>.5?'#c98a5a':'#d99a6c') });
+    }
+    // NPC
+    npcs.push({ x:WORLD.w/2-120, y:WORLD.h/2+40, r:20, name:"波波镇长",
+      color:'#ff9f43',
+      lines:["欢迎来到弹跳奇境！这里的物理被老弹改得乱七八糟。",
+             "收集 10 颗星星，就能点亮夜晚、解锁新的群岛。",
+             "记住——你能拿这个世界做任何事，包括把我弹飞（别真的试）。"],
+      given:false });
+    npcs.push({ x:WORLD.w/2+260, y:WORLD.h/2-120, r:20, name:"石头哲学家",
+      color:'#a0a0b8',
+      lines:["我曾是一块普通的石头，直到我被扔出了三米远。",
+             "那一刻我悟了：人生就像被甩出去的箱子，落点在哪不重要，飞起来才重要。"] });
+    npcs.push({ x:WORLD.w/2+80, y:WORLD.h/2+260, r:20, name:"贪吃箱",
+      color:'#7bed9f',
+      lines:["嗝~ 把星星喂给我，我打嗝吐出抓钩图纸（正式版才有）。",
+             "现在嘛……你就把我当个会说话的箱子好了。"] });
+  }
+
+  // ---------- 输入 ----------
+  const keys = {};
+  addEventListener('keydown', e=>{
+    if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+    keys[e.code]=true;
+    if(!started) return;
+    if(e.code==='KeyE') toggleGrab();
+    if(e.code==='KeyQ') setScale( player.scale+0.25 );
+    if(e.code==='KeyR') setScale( player.scale-0.2 );
+    if(e.code==='KeyF') tryTalk();
+    if(e.code==='Space') doDash();
+  });
+  addEventListener('keyup', e=>{ keys[e.code]=false; });
+  const mouse = { x:0, y:0, down:false, moved:false };
+  const joy = { x:0, y:0, active:false };
+  canvas.addEventListener('mousemove', e=>{ mouse.x=e.clientX; mouse.y=e.clientY; mouse.moved=true; });
+  // 指针事件统一处理：桌面鼠标 + 触屏点击（投掷 / 推进对话）
+  canvas.addEventListener('pointerdown', e=>{
+    if(dialogue){ advanceDialogue(); return; }
+    if(started && player.holding) throwItem();
+  });
+
+  // ---------- 触屏控制（平板/手机） ----------
+  const touchUI = document.getElementById('touchui');
+  const isTouch = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window);
+  if(isTouch && touchUI) touchUI.classList.add('show');
+  const joyBase = document.getElementById('joyBase');
+  const joyKnob = document.getElementById('joyKnob');
+  if(joyBase){
+    let joyId=null, bx=0, by=0;
+    const setJoy = (e)=>{
+      const r=joyBase.getBoundingClientRect(); bx=r.left+r.width/2; by=r.top+r.height/2;
+      let dx=e.clientX-bx, dy=e.clientY-by; const max=r.width/2;
+      const len=Math.hypot(dx,dy); const cl=Math.min(len,max);
+      const nx=len?dx/len:0, ny=len?dy/len:0;
+      joy.x=nx*(cl/max); joy.y=ny*(cl/max);
+      joyKnob.style.transform='translate('+(nx*cl)+'px,'+(ny*cl)+'px)';
+    };
+    const endJoy = (e)=>{ if(e.pointerId===joyId){ joy.active=false; joyId=null; joy.x=0; joy.y=0; joyKnob.style.transform='translate(0,0)'; } };
+    joyBase.addEventListener('pointerdown', e=>{ joy.active=true; joyId=e.pointerId; try{joyBase.setPointerCapture(e.pointerId);}catch(_){} setJoy(e); e.preventDefault(); });
+    joyBase.addEventListener('pointermove', e=>{ if(joy.active && e.pointerId===joyId){ setJoy(e); e.preventDefault(); } });
+    joyBase.addEventListener('pointerup', endJoy);
+    joyBase.addEventListener('pointercancel', endJoy);
+  }
+  function bindBtn(id, fn){
+    const b=document.getElementById(id); if(!b) return;
+    b.addEventListener('pointerdown', e=>{ e.preventDefault(); e.stopPropagation(); fn(); });
+  }
+  bindBtn('btnDash',   ()=>doDash());
+  bindBtn('btnGrab',   ()=>toggleGrab());
+  bindBtn('btnThrow',  ()=>throwItem());
+  bindBtn('btnBig',    ()=>setScale(player.scale+0.25));
+  bindBtn('btnSmall',  ()=>setScale(player.scale-0.2));
+  bindBtn('btnTalk',   ()=>tryTalk());
+
+  function mouseWorld(){ return { x: mouse.x + cam.x, y: mouse.y + cam.y }; }
+
+  // ---------- 能力 ----------
+  function setScale(s){
+    s = clamp(s, 0.6, 1.7);
+    player.scale = s;
+    player.r = player.baseR * s;
+    player.speed = 3.3 / Math.sqrt(s);   // 越大越慢
+    player.mass = 5 * s;
+    spawnParticles(player.x, player.y, 8, '#ffffff');
+  }
+  function doDash(){
+    if(player.dashCd>0) return;
+    const d = inputDir();
+    if(d.x===0 && d.y===0){ d.x=Math.cos(player.face); d.y=Math.sin(player.face); }
+    const len = Math.hypot(d.x,d.y)||1;
+    player.vx += d.x/len * 9;
+    player.vy += d.y/len * 9;
+    player.dashCd = 45; player.dashT = 10;
+    cam.shake = 6;
+    spawnParticles(player.x, player.y, 12, '#9fd3ff');
+  }
+  function toggleGrab(){
+    if(player.holding){ player.holding=null; return; }
+    let best=null, bd=80;
+    for(const it of items){
+      if(it.broken) continue;
+      const dd = dist(it.x,it.y,player.x,player.y);
+      if(dd < bd+it.r){ bd=dd; best=it; }
+    }
+    if(best){ player.holding = best; spawnParticles(best.x,best.y,6,'#ffe08a'); }
+    else toast("附近没有可抓的东西");
+  }
+  function throwItem(){
+    const it = player.holding; if(!it) return;
+    let dx, dy, power;
+    if(joy.active && Math.hypot(joy.x,joy.y)>0.15){ dx=joy.x; dy=joy.y; power=14; }
+    else if(mouse.moved){ const mw=mouseWorld(); dx=mw.x-player.x; dy=mw.y-player.y; power=clamp(Math.hypot(dx,dy)*0.06,4,16); }
+    else { dx=Math.cos(player.face); dy=Math.sin(player.face); power=12; }
+    const len = Math.hypot(dx,dy)||1;
+    it.vx = dx/len * power; it.vy = dy/len * power;
+    player.holding = null;
+    cam.shake = 5;
+    spawnParticles(it.x, it.y, 10, '#ffd86b');
+    beep(220, 0.06);
+  }
+
+  // ---------- 对话 ----------
+  let dialogue = null; // {npc, idx}
+  function tryTalk(){
+    let near=null, nd=70;
+    for(const n of npcs){
+      const dd = dist(n.x,n.y,player.x,player.y);
+      if(dd < nd+n.r){ nd=dd; near=n; }
+    }
+    if(near){ dialogue = { npc:near, idx:0 }; }
+  }
+  function advanceDialogue(){
+    if(!dialogue) return;
+    dialogue.idx++;
+    if(dialogue.idx >= dialogue.npc.lines.length){
+      if(dialogue.npc.name==="波波镇长" && !dialogue.npc.given && starsCollected>=10){
+        dialogue.npc.given = true;
+        dialogue = null;
+        win();
+        return;
+      }
+      dialogue = null;
+    }
+  }
+
+  // ---------- 粒子 ----------
+  function spawnParticles(x,y,n,color){
+    for(let i=0;i<n;i++){
+      const a=rand(0,6.28), s=rand(1,4);
+      particles.push({ x,y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:rand(20,40), color, r:rand(2,4) });
+    }
+  }
+
+  // ---------- 碰撞 ----------
+  function resolve(a,b){
+    const dx=b.x-a.x, dy=b.y-a.y; let d=Math.hypot(dx,dy)||0.001;
+    const overlap=(a.r+b.r)-d; if(overlap<=0) return null;
+    const nx=dx/d, ny=dy/d;
+    const ma=a.mass||1, mb=b.mass||1, tot=ma+mb;
+    // 静态物体不分担位移，动态方承担全部分离量
+    const aS = a.static ? 0 : (b.static ? 1 : mb/tot);
+    const bS = b.static ? 0 : (a.static ? 1 : ma/tot);
+    if(aS>0){ a.x-=nx*overlap*aS; a.y-=ny*overlap*aS; }
+    if(bS>0){ b.x+=nx*overlap*bS; b.y+=ny*overlap*bS; }
+    return {nx,ny};
+  }
+
+  // ---------- 主更新 ----------
+  let starsCollected = 0;
+  function inputDir(){
+    let x=0,y=0;
+    if(keys['KeyW']||keys['ArrowUp']) y-=1;
+    if(keys['KeyS']||keys['ArrowDown']) y+=1;
+    if(keys['KeyA']||keys['ArrowLeft']) x-=1;
+    if(keys['KeyD']||keys['ArrowRight']) x+=1;
+    x += joy.x; y += joy.y;   // 触屏摇杆
+    return {x,y};
+  }
+  function update(f){
+    time = (time + 0.00035*f) % 1;
+
+    // 玩家移动
+    const d = inputDir();
+    const dl = Math.hypot(d.x,d.y);
+    if(dl>0){
+      player.vx += d.x/dl * player.speed * 0.6 * f;
+      player.vy += d.y/dl * player.speed * 0.6 * f;
+      player.face = Math.atan2(d.y,d.x);
+    }
+    // 阻尼
+    player.vx *= Math.pow(0.86, f);
+    player.vy *= Math.pow(0.86, f);
+    if(player.dashT>0) player.dashT-=f;
+    if(player.dashCd>0) player.dashCd-=f;
+    player.x += player.vx*f; player.y += player.vy*f;
+    player.x = clamp(player.x, player.r, WORLD.w-player.r);
+    player.y = clamp(player.y, player.r, WORLD.h-player.r);
+
+    // 抓着的物体跟随：摇杆方向 > 鼠标 > 角色朝向（兼容触屏）
+    if(player.holding){
+      const it=player.holding; let ax, ay;
+      if(joy.active && Math.hypot(joy.x,joy.y)>0.1){ ax=joy.x; ay=joy.y; }
+      else if(mouse.moved){ const mw=mouseWorld(); ax=mw.x-player.x; ay=mw.y-player.y; }
+      else { ax=Math.cos(player.face); ay=Math.sin(player.face); }
+      const l=Math.hypot(ax,ay)||1; ax/=l; ay/=l;
+      const off = player.r+it.r+8;
+      it.x = player.x + ax*off; it.y = player.y + ay*off;
+      it.vx=0; it.vy=0;
+    }
+
+    // 物品物理
+    for(const it of items){
+      if(it.broken || it===player.holding) continue;
+      it.vx *= Math.pow(0.93, f); it.vy *= Math.pow(0.93, f);
+      it.x += it.vx*f; it.y += it.vy*f;
+      // 世界边界反弹
+      if(it.x<it.r){ it.x=it.r; it.vx=Math.abs(it.vx)*0.7; }
+      if(it.x>WORLD.w-it.r){ it.x=WORLD.w-it.r; it.vx=-Math.abs(it.vx)*0.7; }
+      if(it.y<it.r){ it.y=it.r; it.vy=Math.abs(it.vy)*0.7; }
+      if(it.y>WORLD.h-it.r){ it.y=WORLD.h-it.r; it.vy=-Math.abs(it.vy)*0.7; }
+    }
+
+    // 碰撞：物品 vs 障碍 / 物品 vs 物品 / 玩家 vs 一切（被抓住的物体不参与）
+    for(const it of items){
+      if(it.broken || it===player.holding) continue;
+      for(const o of obstacles){
+        const hit = resolve(it, o);
+        if(hit){
+          const vn = it.vx*hit.nx + it.vy*hit.ny;
+          if(vn<0){ const rest=it.rest??0.5; it.vx-=(1+rest)*vn*hit.nx; it.vy-=(1+rest)*vn*hit.ny; }
+        }
+      }
+    }
+    for(let i=0;i<items.length;i++){
+      for(let j=i+1;j<items.length;j++){
+        const a=items[i], b=items[j]; if(a.broken||b.broken||a===player.holding||b===player.holding) continue;
+        const hit=resolve(a,b);
+        if(hit){
+          // 砸箱：相对速度够大则碎
+          const rel=Math.hypot(a.vx-b.vx, a.vy-b.vy);
+          if((a.type==='crate'||b.type==='crate') && rel>7){ breakCrate(a.type==='crate'?a:b); }
+        }
+      }
+    }
+    // 玩家推动物品
+    for(const it of items){
+      if(it.broken || it===player.holding) continue;
+      const hit=resolve(player, it);
+      if(hit){ it.vx*=0.35; it.vy*=0.35; }
+    }
+    // 玩家 vs 障碍
+    for(const o of obstacles){ resolve(player, o); }
+
+    // 弹跳板
+    for(const bp of bounces){
+      if(dist(bp.x,bp.y,player.x,player.y) < bp.r+player.r){
+        const d=inputDir(); let nx=d.x, ny=d.y;
+        if(nx===0&&ny===0){ nx=player.vx; ny=player.vy; }
+        const l=Math.hypot(nx,ny)||1;
+        player.vx = nx/l*11; player.vy = ny/l*11;
+        cam.shake=7; spawnParticles(bp.x,bp.y,14,'#7bed9f'); beep(520,0.07);
+      }
+    }
+
+    // 玩家踩碎箱？靠近高速时
+    if(Math.hypot(player.vx,player.vy)>7){
+      for(const it of items){
+        if(it.broken||it.type!=='crate') continue;
+        if(dist(it.x,it.y,player.x,player.y)<it.r+player.r+4) breakCrate(it);
+      }
+    }
+
+    // 收集星星
+    for(const s of stars){
+      if(s.got) continue;
+      s.ph += 0.05*f;
+      if(dist(s.x,s.y,player.x,player.y) < 13+player.r){
+        s.got=true; starsCollected++;
+        spawnParticles(s.x,s.y,18,'#ffe08a'); beep(880,0.09);
+        toast("⭐ 星星 " + starsCollected + "/10");
+        if(starsCollected===10) toast("集齐了！去找波波镇长聊聊 🎉");
+      }
+    }
+
+    // 粒子
+    for(let i=particles.length-1;i>=0;i--){
+      const p=particles[i]; p.x+=p.vx*f; p.y+=p.vy*f; p.vx*=0.95; p.vy*=0.95; p.life-=f;
+      if(p.life<=0) particles.splice(i,1);
+    }
+
+    // 萤火虫（夜晚）
+    const night = (time>0.55 && time<0.95);
+    if(night && fireflies.length<40 && Math.random()<0.3){
+      fireflies.push({ x:rand(0,WORLD.w), y:rand(0,WORLD.h), ph:rand(0,6.28), vx:rand(-.3,.3), vy:rand(-.3,.3) });
+    }
+    for(let i=fireflies.length-1;i>=0;i--){
+      const ff=fireflies[i]; ff.x+=ff.vx*f; ff.y+=ff.vy*f; ff.ph+=0.04*f;
+      if(!night) fireflies.splice(i,1);
+    }
+
+    // 相机
+    cam.x = clamp(player.x - W/2, 0, Math.max(0,WORLD.w-W));
+    cam.y = clamp(player.y - H/2, 0, Math.max(0,WORLD.h-H));
+    if(cam.shake>0) cam.shake -= f;
+  }
+
+  function breakCrate(c){
+    if(c.broken) return; c.broken=true;
+    spawnParticles(c.x,c.y,20,'#caa06a'); cam.shake=4; beep(160,0.08);
+    if(c.hasStar){
+      stars.push({ x:c.x, y:c.y, got:false, ph:0 });
+      toast("📦 箱子碎了，掉出一颗星星！");
+    }
+  }
+
+  // ---------- 音效（极简） ----------
+  let actx=null;
+  function beep(freq, dur){
+    try{
+      if(!actx) actx=new (window.AudioContext||window.webkitAudioContext)();
+      const o=actx.createOscillator(), g=actx.createGain();
+      o.frequency.value=freq; o.type='triangle';
+      g.gain.value=0.05; o.connect(g); g.connect(actx.destination);
+      o.start(); g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime+dur);
+      o.stop(actx.currentTime+dur);
+    }catch(e){}
+  }
+
+  // ---------- 渲染 ----------
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    const sx = cam.shake>0 ? rand(-cam.shake,cam.shake) : 0;
+    const sy = cam.shake>0 ? rand(-cam.shake,cam.shake) : 0;
+    ctx.save();
+    ctx.translate(-cam.x+sx, -cam.y+sy);
+
+    // 草地底
+    ctx.fillStyle = '#6cbf63';
+    ctx.fillRect(cam.x-50, cam.y-50, W+100, H+100);
+    // 装饰草丛
+    ctx.fillStyle='rgba(255,255,255,0.05)';
+    for(const d of decos){
+      if(d.x<cam.x-20||d.x>cam.x+W+20||d.y<cam.y-20||d.y>cam.y+H+20) continue;
+      ctx.beginPath(); ctx.ellipse(d.x,d.y,7*d.s,4*d.s,0,0,6.28); ctx.fillStyle=d.c; ctx.fill();
+    }
+    // 弹跳板
+    for(const bp of bounces){
+      ctx.beginPath(); ctx.arc(bp.x,bp.y,bp.r,0,6.28);
+      ctx.fillStyle='#2ed573'; ctx.fill();
+      ctx.lineWidth=4; ctx.strokeStyle='#1e9e4f'; ctx.stroke();
+      ctx.fillStyle='#fff'; ctx.font='bold 16px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('↑', bp.x, bp.y+6);
+    }
+    // 星星
+    for(const s of stars){
+      if(s.got) continue;
+      const yy=s.y+Math.sin(s.ph)*4;
+      drawStar(s.x,yy,9,'#ffd86b');
+    }
+    // 障碍
+    for(const o of obstacles){
+      if(o.type==='tree'){
+        ctx.beginPath(); ctx.arc(o.x,o.y+6,o.r*0.7,0,6.28); ctx.fillStyle='#7a5230'; ctx.fill();
+        ctx.beginPath(); ctx.arc(o.x,o.y,o.r,0,6.28); ctx.fillStyle='#2f9e44'; ctx.fill();
+        ctx.beginPath(); ctx.arc(o.x-6,o.y-5,o.r*0.6,0,6.28); ctx.fillStyle='#40c057'; ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.arc(o.x,o.y,o.r,0,6.28); ctx.fillStyle='#9aa0a6'; ctx.fill();
+        ctx.lineWidth=3; ctx.strokeStyle='#6b7177'; ctx.stroke();
+      }
+    }
+    // 物品
+    for(const it of items){
+      if(it.broken) continue;
+      if(it.type==='ball'){
+        ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,6.28); ctx.fillStyle=it.color; ctx.fill();
+        ctx.lineWidth=2; ctx.strokeStyle='#caa83a'; ctx.stroke();
+      } else {
+        ctx.fillStyle = it.color||'#c98a5a';
+        roundRect(it.x-it.r,it.y-it.r,it.r*2,it.r*2,5); ctx.fill();
+        ctx.lineWidth=3; ctx.strokeStyle='rgba(0,0,0,.25)'; ctx.stroke();
+        if(it.type==='crate'){ ctx.strokeStyle='#8a5a2a'; ctx.beginPath();
+          ctx.moveTo(it.x-it.r,it.y); ctx.lineTo(it.x+it.r,it.y);
+          ctx.moveTo(it.x,it.y-it.r); ctx.lineTo(it.x,it.y+it.r); ctx.stroke(); }
+      }
+    }
+    // 萤火虫
+    for(const ff of fireflies){
+      const a=0.4+0.6*Math.abs(Math.sin(ff.ph));
+      ctx.beginPath(); ctx.arc(ff.x,ff.y,2.5,0,6.28);
+      ctx.fillStyle='rgba(255,240,150,'+a+')'; ctx.fill();
+    }
+    // NPC
+    for(const n of npcs){
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,6.28); ctx.fillStyle=n.color; ctx.fill();
+      ctx.lineWidth=3; ctx.strokeStyle='rgba(0,0,0,.25)'; ctx.stroke();
+      // 眼睛
+      ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(n.x-6,n.y-4,4,0,6.28); ctx.arc(n.x+6,n.y-4,4,0,6.28); ctx.fill();
+      ctx.fillStyle='#222'; ctx.beginPath(); ctx.arc(n.x-6,n.y-4,2,0,6.28); ctx.arc(n.x+6,n.y-4,2,0,6.28); ctx.fill();
+      ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif'; ctx.textAlign='center';
+      ctx.fillText(n.name, n.x, n.y-n.r-8);
+      if(dist(n.x,n.y,player.x,player.y)<70+n.r){
+        ctx.fillStyle='rgba(0,0,0,.5)'; roundRect(n.x-22,n.y+n.r+4,44,16,8); ctx.fill();
+        ctx.fillStyle='#fff'; ctx.font='11px sans-serif'; ctx.fillText('按 F 对话', n.x, n.y+n.r+15);
+      }
+    }
+    // 玩家
+    drawPlayer();
+    // 粒子
+    for(const p of particles){
+      ctx.globalAlpha = clamp(p.life/30,0,1);
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,6.28); ctx.fillStyle=p.color; ctx.fill();
+    }
+    ctx.globalAlpha=1;
+    ctx.restore();
+
+    // 昼夜叠色
+    const night = (time>0.5 && time<1);
+    let dark=0;
+    if(time>0.5 && time<0.6) dark=(time-0.5)/0.1*0.45;
+    else if(time>=0.6 && time<0.92) dark=0.45;
+    else if(time>=0.92) dark=(1-time)/0.08*0.45;
+    if(dark>0){ ctx.fillStyle='rgba(10,16,40,'+dark+')'; ctx.fillRect(0,0,W,H); }
+    // 暗角
+    const grd=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.3,W/2,H/2,Math.max(W,H)*0.7);
+    grd.addColorStop(0,'rgba(0,0,0,0)'); grd.addColorStop(1,'rgba(0,0,0,0.35)');
+    ctx.fillStyle=grd; ctx.fillRect(0,0,W,H);
+
+    drawHUD();
+  }
+
+  function drawPlayer(){
+    const p=player;
+    // 冲刺残影
+    if(p.dashT>0){ ctx.globalAlpha=0.3; ctx.beginPath(); ctx.arc(p.x-p.vx*1.5,p.y-p.vy*1.5,p.r,0,6.28); ctx.fillStyle='#74c0fc'; ctx.fill(); ctx.globalAlpha=1; }
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,6.28);
+    ctx.fillStyle='#ff6b6b'; ctx.fill();
+    ctx.lineWidth=3; ctx.strokeStyle='#c92a2a'; ctx.stroke();
+    // 眼睛朝向
+    const ex=Math.cos(p.face)*p.r*0.4, ey=Math.sin(p.face)*p.r*0.4;
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(p.x+ex,p.y+ey,p.r*0.35,0,6.28); ctx.fill();
+    ctx.fillStyle='#222'; ctx.beginPath(); ctx.arc(p.x+ex*1.4,p.y+ey*1.4,p.r*0.18,0,6.28); ctx.fill();
+    // 抓取连线
+    if(p.holding){ ctx.strokeStyle='rgba(255,232,138,.8)'; ctx.lineWidth=3; ctx.setLineDash([5,4]);
+      ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.holding.x,p.holding.y); ctx.stroke(); ctx.setLineDash([]); }
+  }
+
+  function drawStar(x,y,r,color){
+    ctx.save(); ctx.translate(x,y); ctx.beginPath();
+    for(let i=0;i<5;i++){
+      const a=-Math.PI/2 + i*2*Math.PI/5;
+      const a2=a+Math.PI/5;
+      ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+      ctx.lineTo(Math.cos(a2)*r*0.45, Math.sin(a2)*r*0.45);
+    }
+    ctx.closePath(); ctx.fillStyle=color; ctx.fill();
+    ctx.strokeStyle='#e8b800'; ctx.lineWidth=1.5; ctx.stroke(); ctx.restore();
+  }
+  function roundRect(x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+  }
+
+  // ---------- HUD ----------
+  function drawHUD(){
+    // 目标
+    ctx.fillStyle='rgba(0,0,0,.45)'; roundRect(14,14,190,40,10); ctx.fill();
+    ctx.fillStyle='#ffd86b'; ctx.font='bold 16px sans-serif'; ctx.textAlign='left';
+    ctx.fillText('⭐ 星星  '+starsCollected+' / 10', 28, 40);
+
+    // 缩放状态
+    ctx.fillStyle='rgba(0,0,0,.45)'; roundRect(14,62,190,30,8); ctx.fill();
+    ctx.fillStyle='#9fd3ff'; ctx.font='13px sans-serif';
+    ctx.fillText('体型 x'+player.scale.toFixed(2)+'   (Q 大 / R 小)', 28, 82);
+
+    // 小地图
+    const mmW=150, mmH=mmW*WORLD.h/WORLD.w, mx=W-mmW-16, my=16;
+    ctx.fillStyle='rgba(0,0,0,.4)'; roundRect(mx-6,my-6,mmW+12,mmH+12,8); ctx.fill();
+    ctx.fillStyle='#3a5a34'; ctx.fillRect(mx,my,mmW,mmH);
+    const sxk=mmW/WORLD.w, syk=mmH/WORLD.h;
+    ctx.fillStyle='#ffd86b';
+    for(const s of stars){ if(!s.got){ ctx.fillRect(mx+s.x*sxk-1,my+s.y*syk-1,2,2); } }
+    ctx.fillStyle='#ff6b6b'; ctx.beginPath(); ctx.arc(mx+player.x*sxk,my+player.y*syk,3,0,6.28); ctx.fill();
+    ctx.fillStyle='#fff'; for(const n of npcs){ ctx.fillRect(mx+n.x*sxk-1,my+n.y*syk-1,2,2); }
+
+    // 对话
+    if(dialogue){
+      const d=dialogue; const bw=Math.min(560,W-60), bx=(W-bw)/2, by=H-150;
+      ctx.fillStyle='rgba(0,0,0,.7)'; roundRect(bx,by,bw,96,14); ctx.fill();
+      ctx.strokeStyle=d.npc.color; ctx.lineWidth=2; ctx.stroke();
+      ctx.fillStyle=d.npc.color; ctx.font='bold 15px sans-serif'; ctx.textAlign='left';
+      ctx.fillText(d.npc.name, bx+18, by+26);
+      ctx.fillStyle='#fff'; ctx.font='15px sans-serif';
+      wrapText(d.npc.lines[d.idx], bx+18, by+50, bw-36, 20);
+      ctx.fillStyle='#9fd3ff'; ctx.font='12px sans-serif'; ctx.textAlign='right';
+      ctx.fillText('点击继续 ▶', bx+bw-16, by+88);
+    }
+  }
+  function wrapText(text,x,y,maxW,lh){
+    const chars=text.split(''); let line='', yy=y;
+    for(const ch of chars){
+      if(ctx.measureText(line+ch).width>maxW){ ctx.fillText(line,x,yy); line=ch; yy+=lh; }
+      else line+=ch;
+    }
+    ctx.fillText(line,x,yy);
+  }
+
+  // ---------- Toast ----------
+  const toastEl=document.getElementById('toast'); let toastT=null;
+  function toast(msg){
+    toastEl.textContent=msg; toastEl.style.opacity='1';
+    clearTimeout(toastT); toastT=setTimeout(()=>toastEl.style.opacity='0',1600);
+  }
+
+  function win(){
+    toastEl.textContent='🎉 你点亮了奇境！（原型通关，正式版更多群岛）';
+    toastEl.style.opacity='1';
+    clearTimeout(toastT); toastT=setTimeout(()=>toastEl.style.opacity='0',4000);
+    for(let i=0;i<60;i++) spawnParticles(player.x,player.y,1,'#ffd86b');
+  }
+
+  // ---------- 循环 ----------
+  let last=performance.now();
+  function loop(now){
+    const dt=(now-last)/1000; last=now;
+    const f=clamp(dt*60, 0, 3);
+    if(started && !dialogue) update(f);
+    else if(started) update(0); // 对话时暂停世界
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // ---------- 启动 ----------
+  document.getElementById('startBtn').addEventListener('click', ()=>{
+    document.getElementById('overlay').style.display='none';
+    started=true;
+    try{ if(!actx) actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){}
+    buildWorld();
+    player.x=WORLD.w/2; player.y=WORLD.h/2;
+  });
+  buildWorld(); // 预生成以便首帧不空
+})();
+</script>
+  <!-- 触屏操控 UI（平板/手机） -->
+  <div id="touchui">
+    <div id="joyBase"><div id="joyKnob"></div></div>
+    <div id="btnCluster">
+      <button id="btnDash" class="tbtn">⚡<span>冲刺</span></button>
+      <button id="btnGrab" class="tbtn">✋<span>抓/放</span></button>
+      <button id="btnThrow" class="tbtn">🚀<span>投掷</span></button>
+      <button id="btnBig" class="tbtn">🔼<span>变大</span></button>
+      <button id="btnSmall" class="tbtn">🔽<span>变小</span></button>
+      <button id="btnTalk" class="tbtn">💬<span>对话</span></button>
+    </div>
+  </div>
+</body>
+</html>
